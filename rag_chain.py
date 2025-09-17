@@ -5,15 +5,15 @@ from pydantic import BaseModel
 from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 # Azure利用時は:
-# from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
+from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda, RunnableParallel, RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 from utils import format_docs_for_prompt, extract_citations
 
-VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./chroma_redmine")
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
+VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./chroma")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o")
 RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "5"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "800"))
 
@@ -27,21 +27,21 @@ def build_llm():
     """
     if os.getenv("AZURE_OPENAI_ENDPOINT"):
         # Azure利用時の例（モデル名はデプロイ名）
-        # return AzureChatOpenAI(
-        #     azure_deployment=MODEL_NAME,
-        #     api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
-        #     temperature=0,
-        # )
+        return AzureChatOpenAI(
+            azure_deployment=MODEL_NAME,
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
+            temperature=0,
+        )
         raise NotImplementedError("Azure使用時は上のコメントを有効化してください。")
     else:
         return ChatOpenAI(model=MODEL_NAME, temperature=0)
 
 def build_embeddings():
     if os.getenv("AZURE_OPENAI_ENDPOINT"):
-        # return AzureOpenAIEmbeddings(model="text-embedding-3-small")
-        raise NotImplementedError("Azure使用時は上のコメントを有効化してください。")
+        return AzureOpenAIEmbeddings(model="text-embedding-3-large")
+        # raise NotImplementedError("Azure使用時は上のコメントを有効化してください。")
     else:
-        return OpenAIEmbeddings(model="text-embedding-3-small")
+        return OpenAIEmbeddings(model="text-embedding-3-large")
 
 def build_retriever():
     db = Chroma(
@@ -57,7 +57,7 @@ def support_chain():
     出力: {"answer": str, "citations": [...], "used_docs": int}
     """
     # 1) プロンプト読込
-    spec = load_prompt_yaml("prompts/chat/ja/support_rag.v1.yaml")
+    spec = load_prompt_yaml("prompts/prompt.yaml")
     system_msg = next(m for m in spec["messages"] if m["role"] == "system")["content"]
     user_msg = next(m for m in spec["messages"] if m["role"] == "user")["content"]
 
@@ -74,11 +74,20 @@ def support_chain():
     def _retrieve(inputs: Dict[str, Any]) -> List[Document]:
         q = inputs["question"]
         docs = retriever.get_relevant_documents(q)
+        print(docs)
         # スコアをmetadataに埋め込む例（Chroma標準は返さないので省略）
         # for d in docs: d.metadata["score"] = ...
         return docs
 
     retrieve = RunnableLambda(_retrieve)
+
+    def _to_context(docs: list[Document]):
+        from utils import format_docs_for_prompt
+        return format_docs_for_prompt(docs)
+
+    def _to_citations(docs: list[Document]):
+        from utils import extract_citations
+        return extract_citations(docs)
 
     # 3) コンテキスト整形
     def _make_context(docs: List[Document]) -> str:
@@ -91,12 +100,21 @@ def support_chain():
 
     # 5) 並列に docs と入力を束ねる
     # {"question": ..., "history": ...} => {"question": ..., "context": "...formatted...", "citations": [...], "docs": [...]}
-    with_context = RunnableParallel(
-        context = retrieve | to_context,
-        citations = retrieve | to_citations,
-        docs = retrieve
-    ) | RunnablePassthrough.assign(
-        question = lambda x: x["question"]
+    # with_context = RunnableParallel(
+    #     context = retrieve | to_context,
+    #     citations = retrieve | to_citations,
+    #     docs = retrieve
+    # ) | RunnablePassthrough.assign(
+    #     question = lambda x: x["question"]
+    # )
+    with_context = (
+        RunnablePassthrough.assign(
+            docs = retrieve,
+        )
+        .assign(
+            context = lambda x: _to_context(x["docs"]),
+            citations = lambda x: _to_citations(x["docs"])
+        )
     )
 
     # 6) 生成
@@ -116,8 +134,8 @@ def support_chain():
         })
         return {
             "answer": gen,
-            "citations": inputs["citations"],
-            "used_docs": len(inputs["docs"]),
+            "citations": inputs.get("citations", []),
+            "used_docs": len(inputs.get("docs", [])),
         }
 
     finalize = RunnableLambda(_finalize)
