@@ -89,12 +89,12 @@ def main():
             })
 
     # 3. Azure OpenAI Embeddings でベクトル化→Chromaに保存
-    # embeddings = AzureOpenAIEmbeddings(
-    #     azure_deployment=AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-    #     openai_api_version=AZURE_OPENAI_API_VERSION,
-    #     # openai_api_key / azure_endpoint は環境変数から自動読込
-    # )
-    embeddings = AzureOpenAIEmbeddings(model="text-embedding-3-large")
+    embeddings = AzureOpenAIEmbeddings(
+        azure_deployment=AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
+        openai_api_version=AZURE_OPENAI_API_VERSION,
+        # openai_api_key / azure_endpoint は環境変数から自動読込
+    )
+
     db = Chroma(persist_directory=VECTOR_DB_PATH, embedding_function=embeddings)
     db.add_texts(texts=texts, metadatas=metadatas)
     db.persist()
