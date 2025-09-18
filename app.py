@@ -1,12 +1,27 @@
 import os
 from typing import List, Literal, Any, Dict
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from rag_chain import support_chain
 
 load_dotenv()  # .env読み込み
 app = FastAPI(title="Redmine RAG Chat API")
+
+allowed_origins = os.getenv("CORS_ALLOW_ORIGINS")
+origins = [o.strip() for o in allowed_origins.split(",") if o.strip()] if allowed_origins else [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class ChatMessage(BaseModel):
     role: Literal["system","user","assistant"]

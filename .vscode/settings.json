@@ -1,0 +1,22 @@
+{
+    "python.languageServer": "None",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingModuleSource": "none",
+        "reportShadowedImports": "none"
+    },
+    "python.analysis.extraPaths": [
+        "",
+        "/Users/taro_morita/.vscode/extensions/joedevivo.vscode-circuitpython-0.2.0-darwin-arm64/stubs",
+        "/Users/taro_morita/Library/Application Support/Code/User/globalStorage/joedevivo.vscode-circuitpython/bundle/20250917/adafruit-circuitpython-bundle-py-20250917/lib"
+    ],
+    "circuitpython.board.version": null,
+    "cursorpyright.analysis.diagnosticSeverityOverrides": {
+        "reportMissingModuleSource": "none",
+        "reportShadowedImports": "none"
+    },
+    "cursorpyright.analysis.extraPaths": [
+        "",
+        "/Users/taro_morita/.vscode/extensions/joedevivo.vscode-circuitpython-0.2.0-darwin-arm64/stubs",
+        "/Users/taro_morita/Library/Application Support/Code/User/globalStorage/joedevivo.vscode-circuitpython/bundle/20250917/adafruit-circuitpython-bundle-py-20250917/lib"
+    ]
+}

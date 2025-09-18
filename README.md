@@ -1,6 +1,6 @@
 起動方法
 uv sync  # uvを使わない場合は: pip install -r requirements.txt
-uv run uvicorn app:app --reload --port 8000
+uv run uvicorn app:app --reload --port 8001
 # もしくは: uvicorn app:app --reload --port 8000
 
 # 確認方法
