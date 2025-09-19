@@ -5,6 +5,7 @@ import yaml
 from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import RateLimitError
+from langsmith import Client
 
 # Azure利用時は:
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
@@ -24,6 +25,22 @@ MAX_TOKENS = int(os.getenv("MAX_TOKENS", "800"))
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT = os.getenv(
     "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large"
 )
+
+# LangSmith設定
+LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "rag-god-mode")
+LANGCHAIN_TRACING_V2 = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+
+# LangSmithクライアントの初期化
+langsmith_client = None
+if LANGCHAIN_TRACING_V2 and os.getenv("LANGCHAIN_API_KEY"):
+    try:
+        langsmith_client = Client()
+        print(
+            f"LangSmithトレーシングが有効になりました。プロジェクト: {LANGCHAIN_PROJECT}"
+        )
+    except Exception as e:
+        print(f"LangSmithクライアントの初期化に失敗しました: {e}")
+        langsmith_client = None
 
 T = TypeVar("T")
 
@@ -101,6 +118,9 @@ def support_chain():
     入力: {"question": str, "history": [messages?]}
     出力: {"answer": str, "citations": [...], "used_docs": int}
     """
+    # LangSmithトレーシングの設定
+    if LANGCHAIN_TRACING_V2:
+        os.environ["LANGCHAIN_PROJECT"] = LANGCHAIN_PROJECT
     # 1) プロンプト読込
     spec = load_prompt_yaml("prompts/prompt.yaml")
     system_msg = next(m for m in spec["messages"] if m["role"] == "system")["content"]
@@ -208,4 +228,19 @@ def support_chain():
     finalize = RunnableLambda(_finalize)
 
     # 8) 全体パイプ
-    return with_context | finalize
+    chain = with_context | finalize
+
+    # LangSmith用のメタデータを追加
+    if LANGCHAIN_TRACING_V2:
+        chain = chain.with_config(
+            configurable={
+                "metadata": {
+                    "project": LANGCHAIN_PROJECT,
+                    "model": MODEL_NAME,
+                    "retrieval_k": RETRIEVAL_K,
+                    "max_tokens": MAX_TOKENS,
+                }
+            }
+        )
+
+    return chain

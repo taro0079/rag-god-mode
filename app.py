@@ -10,6 +10,13 @@ from rag_chain import support_chain
 from markdown_it import MarkdownIt
 
 load_dotenv()  # .env読み込み
+
+# LangSmithトレーシングの設定確認
+if os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true":
+    print("LangSmithトレーシングが有効です")
+    if not os.getenv("LANGCHAIN_API_KEY"):
+        print("警告: LANGCHAIN_API_KEYが設定されていません")
+
 app = FastAPI(title="Redmine RAG Chat API")
 
 # テンプレート設定
