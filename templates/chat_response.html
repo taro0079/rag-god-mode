@@ -1,7 +1,7 @@
 <div class="message assistant">
     <div class="message-avatar">🤖</div>
     <div class="message-content">
-        <p>{{ answer }}</p>
+        <div class="assistant-markdown">{{ answer_html | safe }}</div>
         {% if citations %}
         <div class="citations">
             <strong>📚 参考資料:</strong>
