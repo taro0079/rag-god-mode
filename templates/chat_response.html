@@ -1,0 +1,45 @@
+<div class="message assistant">
+    <div class="message-avatar">🤖</div>
+    <div class="message-content">
+        <p>{{ answer }}</p>
+        {% if citations %}
+        <div class="citations">
+            <strong>📚 参考資料:</strong>
+            {% for citation in citations %}
+            <div class="citation">
+                {% if citation.url %}
+                <a href="{{ citation.url }}" target="_blank" rel="noopener noreferrer" class="citation-link">
+                    <strong>{{ citation.title or "ドキュメント" }}</strong>
+                </a>
+                {% else %}
+                <strong>{{ citation.title or "ドキュメント" }}</strong>
+                {% endif %}
+                {% if citation.issue_id %}
+                <br><small>Issue ID: #{{ citation.issue_id }}</small>
+                {% endif %}
+                {% if citation.updated_on %}
+                <br><small>更新日: {{ citation.updated_on }}</small>
+                {% endif %}
+                {% if citation.score %}
+                <br><small>関連度: {{ "%.2f"|format(citation.score) }}</small>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        <div class="stats">
+            📊 使用ドキュメント数: {{ used_docs }}
+        </div>
+    </div>
+</div>
+
+<script>
+    // 履歴を更新
+    const newHistory = {{ history | tojson }};
+    chatHistory = newHistory;
+    updateHistory();
+
+    // スクロールを最下部に
+    const messagesContainer = document.getElementById('chat-messages');
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+</script>

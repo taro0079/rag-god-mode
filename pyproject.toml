@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "chromadb>=1.0.21",
     "fastapi>=0.116.1",
+    "jinja2>=3.1.2",
     "langchain>=0.3.27",
     "langchain-community>=0.3.29",
     "langchain-core>=0.3.76",
@@ -14,6 +15,7 @@ dependencies = [
     "langchain-text-splitters>=0.3.11",
     "pydantic>=2.11.9",
     "python-dotenv>=1.1.1",
+    "python-multipart>=0.0.6",
     "pyyaml>=6.0.2",
     "uvicorn[standard]>=0.35.0",
 ]
