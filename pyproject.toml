@@ -13,6 +13,7 @@ dependencies = [
     "langchain-core>=0.3.76",
     "langchain-openai>=0.3.33",
     "langchain-text-splitters>=0.3.11",
+    "langsmith>=0.2.0",
     "markdown-it-py>=4.0.0",
     "pydantic>=2.11.9",
     "python-dotenv>=1.1.1",
