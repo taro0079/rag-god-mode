@@ -5,7 +5,7 @@ import argparse
 import html
 import re
 from time import sleep
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable, TypeVar
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -13,9 +13,48 @@ from dotenv import load_dotenv
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_openai import AzureOpenAIEmbeddings
+from openai import RateLimitError
+
+T = TypeVar("T")
 
 
 load_dotenv()
+
+
+def retry_with_backoff(
+    func: Callable[[], T],
+    max_retries: int = 5,
+    base_delay: float = 1.0,
+    max_delay: float = 60.0,
+) -> T:
+    """
+    レート制限エラーに対して指数バックオフでリトライする関数
+    """
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except RateLimitError as e:
+            if attempt == max_retries - 1:
+                print(
+                    f"最大リトライ回数 ({max_retries}) に達しました。エラー: {e}",
+                    file=sys.stderr,
+                )
+                raise
+
+            # 指数バックオフで待機時間を計算
+            delay = min(base_delay * (2**attempt), max_delay)
+            print(
+                f"レート制限エラーが発生しました。{delay:.1f}秒待機してリトライします... (試行 {attempt + 1}/{max_retries})",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+        except Exception as e:
+            print(f"予期しないエラーが発生しました: {e}", file=sys.stderr)
+            raise
+
+    # この行は到達しないはずですが、型チェッカーのために追加
+    raise RuntimeError("予期しないエラーが発生しました")
+
 
 # --- Relation 設定 ---
 RELATION_BASE_URL = os.getenv(
@@ -102,7 +141,7 @@ def iter_relation_tickets(
         if not tickets:
             break
         for t in tickets:
-            tid = str(t.get("ticket_id"))
+            tid = str(t.get("ticket_id", ""))
             try:
                 detail = _fetch_ticket_messages(message_box_id, tid)
                 results.append(detail)
@@ -153,25 +192,29 @@ def save_to_vector_db(
     db = Chroma(persist_directory=VECTOR_DB_PATH, embedding_function=embeddings)
 
     total = len(texts)
+    total_batches = (total + batch_size - 1) // batch_size
+
     for start in range(0, total, batch_size):
         end = min(start + batch_size, total)
         batch_texts = texts[start:end]
         batch_metas = metadatas[start:end]
+        batch_num = start // batch_size + 1
 
-        attempt = 0
-        while True:
-            try:
-                db.add_texts(texts=batch_texts, metadatas=batch_metas)  # type: ignore[arg-type]
-                break
-            except Exception as e:
-                attempt += 1
-                if attempt > max_retries:
-                    raise
-                wait = retry_wait_sec * (2 ** (attempt - 1))
-                print(
-                    f"Embedding batch {start}-{end} failed: {e}. Retry in {wait}s ({attempt}/{max_retries})..."
-                )
-                time.sleep(wait)
+        print(
+            f"バッチ {batch_num}/{total_batches} を処理中... ({len(batch_texts)} チャンク)"
+        )
+
+        def add_batch() -> List[str]:
+            return db.add_texts(texts=batch_texts, metadatas=batch_metas)  # type: ignore[arg-type]
+
+        try:
+            retry_with_backoff(
+                add_batch, max_retries=max_retries, base_delay=retry_wait_sec
+            )
+            print(f"バッチ {batch_num} 完了")
+        except Exception as e:
+            print(f"バッチ {batch_num} でエラーが発生しました: {e}", file=sys.stderr)
+            raise
 
     db.persist()
 
@@ -215,12 +258,6 @@ def main():
         default=int(os.getenv("RELATION_MAX_RETRIES", "5")),
         help="429等での最大リトライ回数 (既定: 5)",
     )
-    parser.add_argument(
-        "--since",
-        type=str,
-        default=None,
-        help="ISO8601で開始日時",
-    )
     args = parser.parse_args()
 
     if not RELATION_API_KEY:
@@ -231,7 +268,7 @@ def main():
         since = None
         until = None
     elif args.since:
-        since = args.since.strftime("%Y-%m-%dT00:00:00Z")
+        since = args.since
         until = None
     else:
         # 前日 00:00Z 以降
