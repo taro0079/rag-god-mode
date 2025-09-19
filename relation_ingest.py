@@ -60,8 +60,13 @@ def retry_with_backoff(
 RELATION_BASE_URL = os.getenv(
     "RELATION_BASE_URL", "https://customer-precs.relationapp.jp/api/v2/"
 )
+RELATION_BASE_URL_TICKET = os.getenv(
+    "RELATION_BASE_URL_TICKET",
+    "https://customer-precs.relationapp.jp/tickets/#/{message_box_id}/tickets/open/p1/",
+)
 RELATION_API_KEY = os.getenv("RELATION_API_KEY")
-RELATION_MESSAGE_BOX_ID = os.getenv("RELATION_MESSAGE_BOX_ID", "1")
+RELATION_MESSAGE_BOX_ID_RPST = os.getenv("RELATION_MESSAGE_BOX_ID_RPST", "1")
+RELATION_MESSAGE_BOX_ID_RPSTX = os.getenv("RELATION_MESSAGE_BOX_ID_RPSTX", "5")
 
 # --- ベクトルDB設定 ---
 VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./chroma")
@@ -155,6 +160,7 @@ def iter_relation_tickets(
 
 def build_chunks_and_metadata(
     items: List[Dict[str, Any]],
+    message_box_id: str,
 ) -> tuple[List[str], List[Dict[str, str]]]:
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     texts: List[str] = []
@@ -173,6 +179,7 @@ def build_chunks_and_metadata(
                     "source": "relation",
                     "ticket_id": ticket_id,
                     "title": title,
+                    "url": f"{RELATION_BASE_URL_TICKET.format(message_box_id=message_box_id)}{ticket_id}",
                     "chunk_id": f"{ticket_id}-{i}",
                 }
             )
@@ -235,7 +242,7 @@ def main():
     parser.add_argument(
         "--box-id",
         type=str,
-        default=RELATION_MESSAGE_BOX_ID,
+        default=RELATION_MESSAGE_BOX_ID_RPST,
         help="メッセージボックスID",
     )
     parser.add_argument("--since", type=str, default=None, help="ISO8601で開始日時")
@@ -290,7 +297,7 @@ def main():
         print("No Relation tickets to ingest.")
         return
 
-    texts, metadatas = build_chunks_and_metadata(items)
+    texts, metadatas = build_chunks_and_metadata(items, args.box_id)
     if not texts:
         print("No chunks to save.")
         return
