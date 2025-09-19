@@ -21,12 +21,11 @@ VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./chroma_redmine")
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT = os.getenv(
     "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large"
 )
-AZURE_OPENAI_API_VERSION = os.getenv(
-    "AZURE_OPENAI_API_VERSION", "2024-08-01-preview"
-)
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
 
 # 1. 更新日の指定（前日分を対象; 00:00Z〜の単純フィルタ）
 yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+
 
 def fetch_updated_issues():
     """
@@ -37,13 +36,14 @@ def fetch_updated_issues():
     params = {
         "key": API_KEY,
         "updated_on": f">={yesterday}",
-        "status_id": "*",       # 全ステータス対象
-        "include": "journals"   # コメント（ジャーナル）も含める
+        "status_id": "*",  # 全ステータス対象
+        "include": "journals",  # コメント（ジャーナル）も含める
         # "limit": 100, "offset": 0, など
     }
     resp = requests.get(url, params=params, timeout=30)
     resp.raise_for_status()
     return resp.json().get("issues", [])
+
 
 def issue_to_text(issue: dict) -> str:
     lines = []
@@ -59,6 +59,7 @@ def issue_to_text(issue: dict) -> str:
             lines.append(f"コメント({author} @ {created}): {notes}")
     return "\n".join(lines)
 
+
 def main():
     issues = fetch_updated_issues()
     if not issues:
@@ -66,7 +67,7 @@ def main():
         return
 
     # 2. チャンク分割
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     texts, metadatas = [], []
 
     for issue in issues:
@@ -79,20 +80,20 @@ def main():
 
         for i, chunk in enumerate(chunks):
             texts.append(chunk)
-            metadatas.append({
-                "source": "redmine",
-                "issue_id": issue_id,
-                "updated_on": updated_on,
-                "url": url,
-                "chunk_id": f"{issue_id}-{i}",
-                "date": yesterday,
-            })
+            metadatas.append(
+                {
+                    "source": "redmine",
+                    "issue_id": issue_id,
+                    "updated_on": updated_on,
+                    "url": url,
+                    "chunk_id": f"{issue_id}-{i}",
+                    "date": yesterday,
+                }
+            )
 
     # 3. Azure OpenAI Embeddings でベクトル化→Chromaに保存
     embeddings = AzureOpenAIEmbeddings(
         azure_deployment=AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-        openai_api_version=AZURE_OPENAI_API_VERSION,
-        # openai_api_key / azure_endpoint は環境変数から自動読込
     )
 
     db = Chroma(persist_directory=VECTOR_DB_PATH, embedding_function=embeddings)
@@ -100,6 +101,7 @@ def main():
     db.persist()
 
     print(f"{len(texts)} chunks saved to vector DB at {VECTOR_DB_PATH}.")
+
 
 if __name__ == "__main__":
     main()
