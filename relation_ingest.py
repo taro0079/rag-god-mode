@@ -215,6 +215,12 @@ def main():
         default=int(os.getenv("RELATION_MAX_RETRIES", "5")),
         help="429等での最大リトライ回数 (既定: 5)",
     )
+    parser.add_argument(
+        "--since",
+        type=str,
+        default=None,
+        help="ISO8601で開始日時",
+    )
     args = parser.parse_args()
 
     if not RELATION_API_KEY:
@@ -223,6 +229,9 @@ def main():
 
     if args.full:
         since = None
+        until = None
+    elif args.since:
+        since = args.since.strftime("%Y-%m-%dT00:00:00Z")
         until = None
     else:
         # 前日 00:00Z 以降
