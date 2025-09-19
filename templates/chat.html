@@ -572,7 +572,11 @@
         document.body.addEventListener('htmx:beforeRequest', function (evt) {
             const question = document.querySelector('textarea[name="question"]').value.trim();
             if (question) {
-                // ユーザーメッセージを追加
+                // ユーザーメッセージを履歴に追加
+                chatHistory.push({ role: 'user', content: question });
+                updateHistory();
+
+                // ユーザーメッセージを表示
                 addUserMessage(question);
                 // 入力フィールドをクリア
                 document.querySelector('textarea[name="question"]').value = '';
@@ -623,6 +627,7 @@
         function updateHistory() {
             const historyInput = document.getElementById('history-input');
             historyInput.value = JSON.stringify(chatHistory);
+            console.log('履歴を更新しました:', chatHistory);
         }
 
         // リセット機能

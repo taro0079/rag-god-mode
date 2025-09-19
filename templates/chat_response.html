@@ -38,6 +38,7 @@
     const newHistory = {{ history | tojson }};
     chatHistory = newHistory;
     updateHistory();
+    console.log('レスポンス後の履歴:', chatHistory);
 
     // スクロールを最下部に
     const messagesContainer = document.getElementById('chat-messages');

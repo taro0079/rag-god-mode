@@ -96,22 +96,32 @@ async def chat_htmx(request: Request):
     question = form_data.get("question", "")
     history_str = form_data.get("history", "[]")
 
+    print(f"受信した質問: {question}")
+    print(f"受信した履歴: {history_str}")
+
     if not question:
         return HTMLResponse("<div class='error'>質問を入力してください。</div>")
 
     try:
         import json
 
-        history_data = json.loads(history_str)
+        history_data: List[Dict[str, str]] = json.loads(history_str)
+        # フロントエンドから送信される形式: [{"role": "user", "content": "..."}, ...]
+        # LangChainの形式: [("user", "..."), ...]
         history = [(m["role"], m["content"]) for m in history_data]
-    except:
+    except Exception as e:
+        print(f"履歴の解析に失敗しました: {e}")
+        history_data = []
         history = []
 
     # RAGチェーンを実行
     result: Dict[str, Any] = _chain.invoke({"question": question, "history": history})
 
-    # 新しいメッセージを履歴に追加
-    new_history = history + [("user", question), ("assistant", result["answer"])]
+    # 新しいメッセージを履歴に追加（フロントエンド用の形式）
+    new_history = history_data + [
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": result["answer"]},
+    ]
 
     return templates.TemplateResponse(
         "chat_response.html",
