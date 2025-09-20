@@ -7,6 +7,7 @@
     <title>Rpst GOD</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/htmx.org/dist/ext/json-enc.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@13/dist/markdown-it.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -513,9 +514,7 @@
         </div>
 
         <div class="chat-input-container">
-            <form class="chat-input-form" hx-post="/chat-htmx" hx-target="#chat-messages" hx-swap="beforeend"
-                hx-indicator="#loading" hx-ext="json-enc" hx-trigger="submit">
-                <input type="hidden" name="history" id="history-input" value="[]">
+            <form class="chat-input-form" id="chat-form">
                 <textarea class="chat-input" name="question" placeholder="rpstについて質問してください..." required rows="1"
                     onkeydown="handleKeyDown(event)" oninput="autoResize(this)"></textarea>
                 <button type="submit" class="send-button" id="send-button">
@@ -526,8 +525,23 @@
     </div>
 
     <script>
+        const md = window.markdownit
+            ? window.markdownit({
+                  html: false,
+                  linkify: true,
+              })
+                  .enable('table')
+                  .enable('strikethrough')
+            : null;
+
         let chatHistory = [];
         let isComposing = false;
+
+        const chatMessages = document.getElementById('chat-messages');
+        const chatForm = document.querySelector('.chat-input-form');
+        const chatTextarea = document.querySelector('.chat-input');
+        const sendButton = document.getElementById('send-button');
+        const loadingIndicator = document.getElementById('loading');
 
         function handleKeyDown(event) {
             if (event.key !== 'Enter') {
@@ -543,7 +557,7 @@
             }
 
             event.preventDefault();
-            const form = event.target.form || document.querySelector('.chat-input-form');
+            const form = event.target.form || chatForm;
             if (form) {
                 if (typeof form.requestSubmit === 'function') {
                     form.requestSubmit();
@@ -558,53 +572,48 @@
             textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
         }
 
-        const chatInputElement = document.querySelector('.chat-input');
-        if (chatInputElement) {
-            chatInputElement.addEventListener('compositionstart', () => {
+        if (chatTextarea) {
+            chatTextarea.addEventListener('compositionstart', () => {
                 isComposing = true;
             });
-            chatInputElement.addEventListener('compositionend', () => {
+            chatTextarea.addEventListener('compositionend', () => {
                 isComposing = false;
             });
         }
 
-        // HTMXイベントリスナー
-        document.body.addEventListener('htmx:beforeRequest', function (evt) {
-            const question = document.querySelector('textarea[name="question"]').value.trim();
-            if (question) {
-                // ユーザーメッセージを履歴に追加
-                chatHistory.push({ role: 'user', content: question });
-                updateHistory();
+        if (chatForm) {
+            chatForm.addEventListener('submit', handleSubmit);
+        }
 
-                // ユーザーメッセージを表示
-                addUserMessage(question);
-                // 入力フィールドをクリア
-                document.querySelector('textarea[name="question"]').value = '';
-                document.querySelector('textarea[name="question"]').style.height = 'auto';
-                // ボタンを無効化
-                document.getElementById('send-button').disabled = true;
-                // ローディングインジケータを表示
-                document.getElementById('loading').style.display = 'block';
+        function ensureChatStarted() {
+            if (!chatMessages) {
+                return;
             }
-        });
+            const welcome = chatMessages.querySelector('.welcome-message');
+            if (welcome) {
+                welcome.remove();
+            }
+        }
 
-        document.body.addEventListener('htmx:afterRequest', function (evt) {
-            // ボタンを再有効化
-            document.getElementById('send-button').disabled = false;
-            // ローディングインジケータを非表示
-            document.getElementById('loading').style.display = 'none';
-            // 入力フィールドにフォーカス
-            document.querySelector('textarea[name="question"]').focus();
-        });
+        function scrollToBottom() {
+            if (!chatMessages) {
+                return;
+            }
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
 
-        document.body.addEventListener('htmx:responseError', function (evt) {
-            // エラー時もローディングを非表示
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('send-button').disabled = false;
-        });
+        function showLoading(visible) {
+            if (!loadingIndicator) {
+                return;
+            }
+            loadingIndicator.style.display = visible ? 'block' : 'none';
+        }
 
         function addUserMessage(message) {
-            const messagesContainer = document.getElementById('chat-messages');
+            ensureChatStarted();
+            if (!chatMessages) {
+                return;
+            }
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message user';
             messageDiv.innerHTML = `
@@ -613,8 +622,8 @@
                     <p>${escapeHtml(message)}</p>
                 </div>
             `;
-            messagesContainer.appendChild(messageDiv);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            chatMessages.appendChild(messageDiv);
+            scrollToBottom();
         }
 
         function escapeHtml(text) {
@@ -623,38 +632,299 @@
             return div.innerHTML;
         }
 
-        // 履歴を更新する関数
+        function createAssistantMessage() {
+            ensureChatStarted();
+            if (!chatMessages) {
+                return null;
+            }
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message assistant';
+            messageDiv.innerHTML = `
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    <div class="assistant-markdown"></div>
+                    <div class="citations" style="display: none;"></div>
+                    <div class="stats" style="display: none;"></div>
+                </div>
+            `;
+            chatMessages.appendChild(messageDiv);
+            scrollToBottom();
+            return {
+                container: messageDiv,
+                markdownEl: messageDiv.querySelector('.assistant-markdown'),
+                citationsEl: messageDiv.querySelector('.citations'),
+                statsEl: messageDiv.querySelector('.stats'),
+            };
+        }
+
+        function renderMarkdown(target, text) {
+            if (!target) {
+                return;
+            }
+            if (md && typeof md.render === 'function') {
+                target.innerHTML = md.render(text || '');
+            } else {
+                target.textContent = text || '';
+            }
+        }
+
+        function renderCitations(container, citations) {
+            if (!container) {
+                return;
+            }
+
+            if (!Array.isArray(citations) || citations.length === 0) {
+                container.innerHTML = '';
+                container.style.display = 'none';
+                return;
+            }
+
+            container.innerHTML = '';
+            const label = document.createElement('strong');
+            label.textContent = '📚 参考資料:';
+            container.appendChild(label);
+
+            citations.forEach((citation) => {
+                const item = document.createElement('div');
+                item.className = 'citation';
+
+                const titleText = citation.title && citation.title.trim() ? citation.title : 'ドキュメント';
+
+                if (citation.url) {
+                    const link = document.createElement('a');
+                    link.href = citation.url;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    link.className = 'citation-link';
+                    link.textContent = titleText;
+                    item.appendChild(link);
+                } else {
+                    const strong = document.createElement('strong');
+                    strong.textContent = titleText;
+                    item.appendChild(strong);
+                }
+
+                if (citation.issue_id) {
+                    item.appendChild(document.createElement('br'));
+                    const issue = document.createElement('small');
+                    issue.textContent = `Issue ID: #${citation.issue_id}`;
+                    item.appendChild(issue);
+                }
+
+                if (citation.updated_on) {
+                    item.appendChild(document.createElement('br'));
+                    const updated = document.createElement('small');
+                    updated.textContent = `更新日: ${citation.updated_on}`;
+                    item.appendChild(updated);
+                }
+
+                if (typeof citation.score !== 'undefined' && citation.score !== null) {
+                    item.appendChild(document.createElement('br'));
+                    const score = document.createElement('small');
+                    const value =
+                        typeof citation.score === 'number'
+                            ? citation.score.toFixed(2)
+                            : String(citation.score);
+                    score.textContent = `関連度: ${value}`;
+                    item.appendChild(score);
+                }
+
+                container.appendChild(item);
+            });
+
+            container.style.display = 'block';
+        }
+
+        function showError(assistantMessage, error) {
+            if (!assistantMessage || !assistantMessage.markdownEl) {
+                return;
+            }
+            const message =
+                (error && error.message) || 'エラーが発生しました。時間をおいて再度お試しください。';
+            assistantMessage.markdownEl.innerHTML = `<div class="error">${escapeHtml(message)}</div>`;
+            if (assistantMessage.citationsEl) {
+                assistantMessage.citationsEl.innerHTML = '';
+                assistantMessage.citationsEl.style.display = 'none';
+            }
+            if (assistantMessage.statsEl) {
+                assistantMessage.statsEl.textContent = '';
+                assistantMessage.statsEl.style.display = 'none';
+            }
+            chatHistory.push({ role: 'assistant', content: message });
+            updateHistory();
+            scrollToBottom();
+        }
+
+        async function streamAssistantResponse(question, assistantMessage) {
+            if (!assistantMessage) {
+                throw new Error('応答メッセージの初期化に失敗しました。');
+            }
+
+            const response = await fetch('/chat-stream', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    question,
+                    history: chatHistory,
+                }),
+            });
+
+            if (!response.ok || !response.body) {
+                throw new Error('ストリーミングの開始に失敗しました');
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let answerText = '';
+
+            const processEvent = (rawLine) => {
+                if (!rawLine || !rawLine.trim()) {
+                    return;
+                }
+
+                let event;
+                try {
+                    event = JSON.parse(rawLine);
+                } catch (parseError) {
+                    console.warn('JSON parse error:', parseError, rawLine);
+                    return;
+                }
+
+                if (event.type === 'token') {
+                    if (typeof event.content === 'string') {
+                        answerText += event.content;
+                        renderMarkdown(assistantMessage.markdownEl, answerText);
+                        scrollToBottom();
+                    }
+                    return;
+                }
+
+                if (event.type === 'done') {
+                    if (typeof event.answer === 'string' && event.answer.length) {
+                        answerText = event.answer;
+                    }
+                    renderMarkdown(assistantMessage.markdownEl, answerText);
+                    renderCitations(assistantMessage.citationsEl, event.citations || []);
+                    if (assistantMessage.statsEl) {
+                        assistantMessage.statsEl.textContent = `📊 使用ドキュメント数: ${event.used_docs ?? 0}`;
+                        assistantMessage.statsEl.style.display = 'block';
+                    }
+                    chatHistory.push({ role: 'assistant', content: answerText });
+                    updateHistory();
+                    scrollToBottom();
+                    return;
+                }
+
+                if (event.type === 'error') {
+                    throw new Error(event.message || 'エラーが発生しました');
+                }
+            };
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) {
+                    break;
+                }
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() ?? '';
+                for (const line of lines) {
+                    processEvent(line);
+                }
+            }
+
+            if (buffer.trim()) {
+                processEvent(buffer);
+            }
+
+            if (!answerText) {
+                renderCitations(assistantMessage.citationsEl, []);
+            }
+        }
+
+        async function handleSubmit(event) {
+            event.preventDefault();
+            if (!chatTextarea) {
+                return;
+            }
+
+            const question = chatTextarea.value.trim();
+            if (!question) {
+                return;
+            }
+
+            chatHistory.push({ role: 'user', content: question });
+            updateHistory();
+
+            addUserMessage(question);
+            chatTextarea.value = '';
+            autoResize(chatTextarea);
+
+            if (sendButton) {
+                sendButton.disabled = true;
+            }
+            showLoading(true);
+
+            const assistantMessage = createAssistantMessage();
+
+            try {
+                await streamAssistantResponse(question, assistantMessage);
+            } catch (error) {
+                showError(assistantMessage, error);
+            } finally {
+                if (sendButton) {
+                    sendButton.disabled = false;
+                }
+                showLoading(false);
+                chatTextarea.focus();
+            }
+        }
+
         function updateHistory() {
-            const historyInput = document.getElementById('history-input');
-            historyInput.value = JSON.stringify(chatHistory);
             console.log('履歴を更新しました:', chatHistory);
         }
 
-        // リセット機能
         function resetChat() {
-            if (confirm('チャット履歴をリセットしますか？')) {
-                // メッセージをクリアしてウェルカムメッセージを表示
-                const messagesContainer = document.getElementById('chat-messages');
-                const headerBar = messagesContainer.querySelector('.chat-header-bar');
-                messagesContainer.innerHTML = '';
-                messagesContainer.appendChild(headerBar);
+            if (!confirm('チャット履歴をリセットしますか？')) {
+                return;
+            }
+
+            if (chatMessages) {
+                const headerBar = chatMessages.querySelector('.chat-header-bar');
+                chatMessages.innerHTML = '';
+                if (headerBar) {
+                    chatMessages.appendChild(headerBar);
+                }
 
                 const welcomeDiv = document.createElement('div');
                 welcomeDiv.className = 'welcome-message';
                 welcomeDiv.innerHTML = '<p>まだメッセージはありません</p>';
-                messagesContainer.appendChild(welcomeDiv);
+                chatMessages.appendChild(welcomeDiv);
+            }
 
-                // 履歴をリセット
-                chatHistory = [];
-                updateHistory();
+            chatHistory = [];
+            updateHistory();
 
-                // 入力フィールドをクリア
-                document.querySelector('textarea[name="question"]').value = '';
-                document.querySelector('textarea[name="question"]').style.height = 'auto';
+            if (chatTextarea) {
+                chatTextarea.value = '';
+                autoResize(chatTextarea);
+                chatTextarea.focus();
+            }
+
+            showLoading(false);
+
+            if (sendButton) {
+                sendButton.disabled = false;
             }
         }
 
-        // ページ読み込み時に履歴を初期化
+        window.resetChat = resetChat;
+        window.handleKeyDown = handleKeyDown;
+        window.autoResize = autoResize;
+
         updateHistory();
     </script>
 </body>

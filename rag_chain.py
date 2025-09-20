@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Dict, Any, List, Callable, TypeVar
+from typing import Dict, Any, List, Callable, TypeVar, Iterator
 import yaml
 from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -110,6 +110,59 @@ def build_embeddings():
 def build_retriever():
     db = Chroma(persist_directory=VECTOR_DB_PATH, embedding_function=build_embeddings())
     return db.as_retriever(search_kwargs={"k": RETRIEVAL_K})
+
+
+class SupportChain:
+    """Wrapper providing both invoke and streaming helpers for the RAG chain."""
+
+    def __init__(self, *, chain, with_context, generate):
+        self._chain = chain
+        self._with_context = with_context
+        self._generate = generate
+
+    def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Proxy to the underlying chain's invoke method."""
+        return self._chain.invoke(inputs)
+
+    async def ainvoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Async variant mirroring LangChain's ainvoke."""
+        return await self._chain.ainvoke(inputs)
+
+    def stream_answer(self, inputs: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+        """Yield streaming events for the assistant's answer along with metadata."""
+
+        context_inputs = self._with_context.invoke(inputs)
+
+        llm_inputs = {
+            "history": context_inputs.get("history", inputs.get("history", [])),
+            "question": context_inputs["question"],
+            "context": context_inputs.get("context", ""),
+        }
+
+        answer_buffer: List[str] = []
+
+        try:
+            for chunk in self._generate.stream(llm_inputs):
+                answer_buffer.append(chunk)
+                yield {"type": "token", "content": chunk}
+        except Exception as error:  # pragma: no cover - lifecycle delegation
+            yield {
+                "type": "error",
+                "message": str(error),
+            }
+            return
+
+        answer_text = "".join(answer_buffer)
+
+        yield {
+            "type": "done",
+            "answer": answer_text,
+            "citations": context_inputs.get("citations", []),
+            "used_docs": len(context_inputs.get("docs", [])),
+        }
+
+    def __getattr__(self, item: str):
+        return getattr(self._chain, item)
 
 
 def support_chain():
@@ -228,11 +281,11 @@ def support_chain():
     finalize = RunnableLambda(_finalize)
 
     # 8) 全体パイプ
-    chain = with_context | finalize
+    base_chain = with_context | finalize
 
     # LangSmith用のメタデータを追加
     if LANGCHAIN_TRACING_V2:
-        chain = chain.with_config(
+        base_chain = base_chain.with_config(
             configurable={
                 "metadata": {
                     "project": LANGCHAIN_PROJECT,
@@ -243,4 +296,4 @@ def support_chain():
             }
         )
 
-    return chain
+    return SupportChain(chain=base_chain, with_context=with_context, generate=generate)

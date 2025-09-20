@@ -1,8 +1,9 @@
+import json
 import os
 from typing import List, Literal, Any, Dict
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -88,6 +89,25 @@ def chat(req: ChatRequest):
     return ChatResponse(**result)
 
 
+@app.post("/chat-stream")
+def chat_stream(req: ChatRequest):
+    """Stream assistant tokens as NDJSON events."""
+
+    history = [(m.role, m.content) for m in req.history]
+    inputs = {"question": req.question, "history": history}
+
+    def event_iterator():
+        try:
+            for event in _chain.stream_answer(inputs):
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+        except Exception as exc:  # pragma: no cover - surface unexpected failures
+            yield json.dumps(
+                {"type": "error", "message": str(exc)}, ensure_ascii=False
+            ) + "\n"
+
+    return StreamingResponse(event_iterator(), media_type="application/json")
+
+
 @app.post("/chat-htmx", response_class=HTMLResponse)
 async def chat_htmx(request: Request):
     """HTMX用のチャットエンドポイント"""
@@ -103,8 +123,6 @@ async def chat_htmx(request: Request):
         return HTMLResponse("<div class='error'>質問を入力してください。</div>")
 
     try:
-        import json
-
         history_data: List[Dict[str, str]] = json.loads(history_str)
         # フロントエンドから送信される形式: [{"role": "user", "content": "..."}, ...]
         # LangChainの形式: [("user", "..."), ...]
