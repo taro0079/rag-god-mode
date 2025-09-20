@@ -144,6 +144,23 @@
 
         .assistant-markdown {
             width: 100%;
+            transition: opacity 0.2s ease;
+            will-change: contents;
+        }
+
+        .assistant-markdown.is-streaming {
+            opacity: 0.88;
+        }
+
+        .assistant-markdown.is-streaming::after {
+            content: "";
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            margin-left: 4px;
+            background: #ffffff;
+            animation: caret-blink 1.2s steps(2, start) infinite;
+            vertical-align: bottom;
         }
 
         .assistant-markdown p,
@@ -466,6 +483,19 @@
             }
         }
 
+        @keyframes caret-blink {
+
+            0%,
+            49% {
+                opacity: 1;
+            }
+
+            50%,
+            100% {
+                opacity: 0;
+            }
+        }
+
         .stats {
             font-size: 12px;
             color: #888888;
@@ -527,12 +557,23 @@
     <script>
         const md = window.markdownit
             ? window.markdownit({
-                  html: false,
-                  linkify: true,
-              })
-                  .enable('table')
-                  .enable('strikethrough')
+                html: false,
+                linkify: true,
+            })
+                .enable('table')
+                .enable('strikethrough')
             : null;
+
+        const raf =
+            typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+                ? window.requestAnimationFrame.bind(window)
+                : (cb) => setTimeout(cb, 16);
+        const caf =
+            typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function'
+                ? window.cancelAnimationFrame.bind(window)
+                : (id) => clearTimeout(id);
+
+        const TYPEWRITER_CHAR_DELAY = 20; // milliseconds per character
 
         let chatHistory = [];
         let isComposing = false;
@@ -542,6 +583,7 @@
         const chatTextarea = document.querySelector('.chat-input');
         const sendButton = document.getElementById('send-button');
         const loadingIndicator = document.getElementById('loading');
+        let scrollFrameId = null;
 
         function handleKeyDown(event) {
             if (event.key !== 'Enter') {
@@ -595,11 +637,36 @@
             }
         }
 
-        function scrollToBottom() {
+        function scrollToBottom(force = false) {
             if (!chatMessages) {
                 return;
             }
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            if (force) {
+                if (scrollFrameId !== null) {
+                    caf(scrollFrameId);
+                    scrollFrameId = null;
+                }
+                try {
+                    chatMessages.scrollTo({ top: chatMessages.scrollHeight, behavior: 'auto' });
+                } catch (_) {
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                }
+                return;
+            }
+
+            if (scrollFrameId !== null) {
+                return;
+            }
+
+            scrollFrameId = raf(() => {
+                try {
+                    chatMessages.scrollTo({ top: chatMessages.scrollHeight, behavior: 'smooth' });
+                } catch (_) {
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                }
+                scrollFrameId = null;
+            });
         }
 
         function showLoading(visible) {
@@ -649,11 +716,17 @@
             `;
             chatMessages.appendChild(messageDiv);
             scrollToBottom();
+            const markdownEl = messageDiv.querySelector('.assistant-markdown');
+            const citationsEl = messageDiv.querySelector('.citations');
+            const statsEl = messageDiv.querySelector('.stats');
+            if (markdownEl) {
+                markdownEl.classList.add('is-streaming');
+            }
             return {
                 container: messageDiv,
-                markdownEl: messageDiv.querySelector('.assistant-markdown'),
-                citationsEl: messageDiv.querySelector('.citations'),
-                statsEl: messageDiv.querySelector('.stats'),
+                markdownEl,
+                citationsEl,
+                statsEl,
             };
         }
 
@@ -742,6 +815,7 @@
             const message =
                 (error && error.message) || 'エラーが発生しました。時間をおいて再度お試しください。';
             assistantMessage.markdownEl.innerHTML = `<div class="error">${escapeHtml(message)}</div>`;
+            assistantMessage.markdownEl.classList.remove('is-streaming');
             if (assistantMessage.citationsEl) {
                 assistantMessage.citationsEl.innerHTML = '';
                 assistantMessage.citationsEl.style.display = 'none';
@@ -778,7 +852,89 @@
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
-            let answerText = '';
+            let rawText = '';
+            let displayedText = '';
+            const pendingChars = [];
+            let typewriterFrame = null;
+            let lastFrameTime = 0;
+            let streamComplete = false;
+            let finalPayload = null;
+            let finalized = false;
+
+            let resolveFinalization;
+            const finalizationPromise = new Promise((resolve) => {
+                resolveFinalization = resolve;
+            });
+
+            const cancelTypewriter = () => {
+                if (typewriterFrame !== null) {
+                    caf(typewriterFrame);
+                    typewriterFrame = null;
+                }
+            };
+
+            const finalizeAnswer = () => {
+                if (finalized) {
+                    return;
+                }
+                if (!streamComplete || pendingChars.length > 0) {
+                    return;
+                }
+                finalized = true;
+                const finalText =
+                    finalPayload && typeof finalPayload.answer === 'string' && finalPayload.answer.length
+                        ? finalPayload.answer
+                        : rawText;
+                displayedText = finalText;
+                if (assistantMessage.markdownEl) {
+                    renderMarkdown(assistantMessage.markdownEl, finalText);
+                    assistantMessage.markdownEl.classList.remove('is-streaming');
+                }
+                const citations = (finalPayload && finalPayload.citations) || [];
+                renderCitations(assistantMessage.citationsEl, citations);
+                if (assistantMessage.statsEl) {
+                    const docsUsed =
+                        finalPayload && typeof finalPayload.used_docs === 'number'
+                            ? finalPayload.used_docs
+                            : citations.length;
+                    assistantMessage.statsEl.textContent = `📊 使用ドキュメント数: ${docsUsed}`;
+                    assistantMessage.statsEl.style.display = 'block';
+                }
+                chatHistory.push({ role: 'assistant', content: finalText });
+                updateHistory();
+                scrollToBottom(true);
+                resolveFinalization();
+            };
+
+            const typewriterStep = (timestamp) => {
+                if (!pendingChars.length) {
+                    typewriterFrame = null;
+                    finalizeAnswer();
+                    return;
+                }
+
+                if (!lastFrameTime || timestamp - lastFrameTime >= TYPEWRITER_CHAR_DELAY) {
+                    const nextChar = pendingChars.shift();
+                    if (typeof nextChar === 'string') {
+                        displayedText += nextChar;
+                        if (assistantMessage.markdownEl) {
+                            renderMarkdown(assistantMessage.markdownEl, displayedText);
+                        }
+                        lastFrameTime = timestamp;
+                        scrollToBottom();
+                    } else {
+                        lastFrameTime = timestamp;
+                    }
+                }
+
+                typewriterFrame = raf(typewriterStep);
+            };
+
+            const scheduleTypewriter = () => {
+                if (typewriterFrame === null) {
+                    typewriterFrame = raf(typewriterStep);
+                }
+            };
 
             const processEvent = (rawLine) => {
                 if (!rawLine || !rawLine.trim()) {
@@ -794,27 +950,24 @@
                 }
 
                 if (event.type === 'token') {
-                    if (typeof event.content === 'string') {
-                        answerText += event.content;
-                        renderMarkdown(assistantMessage.markdownEl, answerText);
-                        scrollToBottom();
+                    if (typeof event.content === 'string' && event.content.length) {
+                        const chars = Array.from(event.content);
+                        pendingChars.push(...chars);
+                        rawText += event.content;
+                        scheduleTypewriter();
                     }
                     return;
                 }
 
                 if (event.type === 'done') {
+                    finalPayload = event;
                     if (typeof event.answer === 'string' && event.answer.length) {
-                        answerText = event.answer;
+                        rawText = event.answer;
                     }
-                    renderMarkdown(assistantMessage.markdownEl, answerText);
-                    renderCitations(assistantMessage.citationsEl, event.citations || []);
-                    if (assistantMessage.statsEl) {
-                        assistantMessage.statsEl.textContent = `📊 使用ドキュメント数: ${event.used_docs ?? 0}`;
-                        assistantMessage.statsEl.style.display = 'block';
+                    streamComplete = true;
+                    if (pendingChars.length === 0) {
+                        finalizeAnswer();
                     }
-                    chatHistory.push({ role: 'assistant', content: answerText });
-                    updateHistory();
-                    scrollToBottom();
                     return;
                 }
 
@@ -823,26 +976,44 @@
                 }
             };
 
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) {
-                    break;
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                        break;
+                    }
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() ?? '';
+                    for (const line of lines) {
+                        processEvent(line);
+                    }
                 }
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop() ?? '';
-                for (const line of lines) {
-                    processEvent(line);
+
+                if (buffer.trim()) {
+                    processEvent(buffer);
+                }
+            } catch (streamError) {
+                finalized = true;
+                cancelTypewriter();
+                pendingChars.length = 0;
+                resolveFinalization();
+                throw streamError;
+            } finally {
+                if (!finalized) {
+                    streamComplete = true;
+                    if (!finalPayload) {
+                        finalPayload = { answer: rawText, citations: [], used_docs: 0 };
+                    }
+                    if (pendingChars.length === 0) {
+                        finalizeAnswer();
+                    } else {
+                        scheduleTypewriter();
+                    }
                 }
             }
 
-            if (buffer.trim()) {
-                processEvent(buffer);
-            }
-
-            if (!answerText) {
-                renderCitations(assistantMessage.citationsEl, []);
-            }
+            await finalizationPromise;
         }
 
         async function handleSubmit(event) {
